@@ -1,0 +1,49 @@
+{
+  "name": "agente-binancemaster",
+  "version": "0.1.0",
+  "description": "Autonomous crypto trading agent for Binance Testnet and Bybit Demo",
+  "main": "dist/agent.js",
+  "scripts": {
+    "dev": "tsx watch src/agent.ts",
+    "dev:server": "tsx watch src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "start": "node dist/agent.js",
+    "start:server": "node dist/server.js",
+    "backtest": "tsx src/backtesting/cli.ts",
+    "test": "tsx src/__tests__/connection.test.ts",
+    "test:binance": "tsx src/__tests__/binance.test.ts",
+    "test:indicators": "tsx src/__tests__/indicators.test.ts",
+    "test:scorer": "tsx src/__tests__/scorer.test.ts",
+    "test:risk": "tsx src/__tests__/risk-manager.test.ts",
+    "test:executor": "tsx src/__tests__/executor.test.ts",
+    "test:telegram": "tsx src/__tests__/telegram.test.ts"
+  },
+  "keywords": [
+    "trading",
+    "crypto",
+    "binance",
+    "bybit",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "ccxt": "^4.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "grammy": "^1.21.0",
+    "pg": "^8.23.1",
+    "technicalindicators": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.19.37",
+    "@types/pg": "^8.18.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
