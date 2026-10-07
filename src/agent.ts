@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import BinanceClient from './config/binance';
 import { calculateAllIndicators, OHLCV } from './analysis/indicators';
 import { detectMarketRegime, isGoodTimeToTrade, getPositionSizeMultiplier } from './analysis/market-regime';
@@ -6,6 +7,29 @@ import { RiskManager, Position, computePnl } from './trading/risk-manager';
 import { OrderExecutor } from './trading/executor';
 import TelegramNotifier from './notifications/telegram';
 import { getTradeLogger } from './memory/trade-logger';
+import { buildForecast, Forecast, timeframeToMs } from './analysis/forecast';
+
+/**
+ * Señal registrada para el dashboard (compras ejecutadas y avisos de venta)
+ */
+export interface TradeSignal {
+  id: string;
+  symbol: string;
+  timeframe: '1m' | '5m';
+  side: 'buy' | 'sell';
+  executed: boolean; // false: solo aviso (el agente no abre cortos)
+  time: string; // ISO de la vela en la que se produjo
+  price: number;
+  score: number;
+  confidence: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  forecast: Forecast | null;
+}
+
+const MAX_SIGNALS = 100;
+const SELL_SIGNAL_COOLDOWN_CANDLES = 12; // Un aviso de venta por símbolo/temporalidad cada 12 velas
+const FORECAST_HISTORY = 1000; // Velas para buscar análogos (máximo de Binance por petición)
 
 /**
  * Estado del agente
@@ -67,6 +91,7 @@ class TradingAgent {
   private lastReportTime: number = 0; // Control para reportes cada hora
   private isScanning = false; // Evita escaneos solapados
   private pauseReason: 'manual' | 'risk' | null = null;
+  private signals: TradeSignal[] = []; // Más recientes al final
 
   constructor(initialCapital: number = 10000) {
     this.binanceClient = new BinanceClient();
@@ -317,6 +342,7 @@ class TradingAgent {
       }
 
       const currentPrice = ohlcv[ohlcv.length - 1].close;
+      const candleTime = ohlcv[ohlcv.length - 1].timestamp;
 
       // Detectar régimen de mercado
       const regime = detectMarketRegime(ohlcv);
@@ -354,6 +380,26 @@ class TradingAgent {
         signalScore.type === 'buy' &&
         signalScore.score > minScore &&
         signalScore.confidence >= minConfidence;
+
+      // Señal de venta: solo aviso visual (no se opera en corto)
+      const isSellWarning =
+        signalScore.type === 'sell' &&
+        signalScore.score < minScore &&
+        signalScore.confidence >= minConfidence;
+
+      if (isSellWarning && this.state.isRunning && !this.hasRecentSellSignal(symbol, timeframe, candleTime)) {
+        console.log(`  🔻 Señal de venta (aviso, no se opera en corto)`);
+        await this.recordSignal({
+          symbol,
+          timeframe,
+          side: 'sell',
+          executed: false,
+          candleTime,
+          price: currentPrice,
+          score: signalScore.score,
+          confidence: signalScore.confidence
+        });
+      }
 
       if (!isValidSignal) {
         if (signalScore.score < 6.5 || signalScore.confidence < 65) {
@@ -445,9 +491,103 @@ class TradingAgent {
         signalScore.score
       );
 
+      // Registrar la entrada con su proyección para el dashboard
+      await this.recordSignal({
+        symbol,
+        timeframe,
+        side: 'buy',
+        executed: true,
+        candleTime,
+        price: currentPrice,
+        score: signalScore.score,
+        confidence: signalScore.confidence,
+        stopLoss: levels.stopLoss,
+        takeProfit: levels.takeProfit
+      });
+
     } catch (error) {
       console.error(`Error analizando ${symbol}:`, error);
     }
+  }
+
+  /**
+   * ¿Hubo un aviso de venta reciente para este símbolo y temporalidad?
+   */
+  private hasRecentSellSignal(symbol: string, timeframe: '1m' | '5m', candleTime: number): boolean {
+    const stepMs = timeframeToMs(timeframe) ?? 60_000;
+    const cutoff = candleTime - SELL_SIGNAL_COOLDOWN_CANDLES * stepMs;
+    return this.signals.some(
+      s => s.side === 'sell' && s.symbol === symbol && s.timeframe === timeframe && new Date(s.time).getTime() > cutoff
+    );
+  }
+
+  /**
+   * Guarda una señal con su proyección de velas. Un fallo en la proyección no afecta a la operación.
+   */
+  private async recordSignal(input: {
+    symbol: string;
+    timeframe: '1m' | '5m';
+    side: 'buy' | 'sell';
+    executed: boolean;
+    candleTime: number;
+    price: number;
+    score: number;
+    confidence: number;
+    stopLoss?: number;
+    takeProfit?: number;
+  }): Promise<void> {
+    let forecast: Forecast | null = null;
+    try {
+      forecast = await this.buildSignalForecast(input.symbol, input.timeframe, input.price, input.candleTime);
+    } catch (error) {
+      console.warn(`  ⚠️ No se pudo calcular la proyección de ${input.symbol}:`, error);
+    }
+
+    const { candleTime, ...rest } = input;
+    this.signals.push({
+      id: randomUUID(),
+      ...rest,
+      time: new Date(candleTime).toISOString(),
+      forecast
+    });
+    if (this.signals.length > MAX_SIGNALS) {
+      this.signals.splice(0, this.signals.length - MAX_SIGNALS);
+    }
+  }
+
+  /**
+   * Proyección por análogos usando solo velas cerradas anteriores a la señal
+   */
+  private async buildSignalForecast(
+    symbol: string,
+    timeframe: '1m' | '5m',
+    price: number,
+    candleTime: number
+  ): Promise<Forecast | null> {
+    const stepMs = timeframeToMs(timeframe);
+    if (!stepMs) return null;
+
+    const data = await this.binanceClient.getOHLCV(symbol, timeframe, FORECAST_HISTORY);
+    const history: OHLCV[] = data
+      .map(([ts, o, h, l, c, v]: [number, number, number, number, number, number]) => ({
+        timestamp: ts,
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: v
+      }))
+      .filter((c: OHLCV) => c.timestamp < candleTime);
+
+    return buildForecast(history, { basePrice: price, baseTime: candleTime, stepMs, horizon: 12 });
+  }
+
+  /**
+   * Señales recientes (más recientes primero), opcionalmente filtradas por símbolo
+   */
+  getSignals(symbol?: string): TradeSignal[] {
+    const list = symbol ? this.signals.filter(s => s.symbol === symbol) : this.signals;
+    return [...list].reverse();
   }
 
   /**

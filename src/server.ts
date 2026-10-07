@@ -126,17 +126,18 @@ app.get('/api/positions', async (_req: Request, res: Response) => {
     const tradeLogger = getTradeLogger();
     const positions = await tradeLogger.getOpenPositions();
 
+    // Números sin redondear y fecha ISO: el dashboard formatea según el precio (p. ej. DOGE necesita más decimales)
     return res.json(
       positions.map(p => ({
         id: p.id,
         symbol: p.symbol,
         side: p.side,
-        entryPrice: Number(p.entryPrice).toFixed(2),
-        quantity: Number(p.quantity).toFixed(6),
-        riskAmount: Number(p.riskAmount).toFixed(2),
-        stopLoss: Number(p.stopLoss).toFixed(2),
-        takeProfit: Number(p.takeProfit).toFixed(2),
-        timestamp: new Date(p.timestamp).toLocaleString('es-ES')
+        entryPrice: Number(p.entryPrice),
+        quantity: Number(p.quantity),
+        riskAmount: Number(p.riskAmount),
+        stopLoss: Number(p.stopLoss),
+        takeProfit: Number(p.takeProfit),
+        timestamp: new Date(p.timestamp).toISOString()
       }))
     );
   } catch (error) {
@@ -163,13 +164,13 @@ app.get('/api/trades', async (_req: Request, res: Response) => {
           id: p.id,
           symbol: p.symbol,
           side: p.side,
-          entryPrice: entryPrice.toFixed(2),
-          exitPrice: exitPrice !== null ? exitPrice.toFixed(2) : 'N/A',
-          quantity: quantity.toFixed(6),
-          pnl: pnl !== null ? pnl.toFixed(2) : 'N/A',
-          pnlPercent: pnl !== null ? ((pnl / (entryPrice * quantity)) * 100).toFixed(2) : 'N/A',
+          entryPrice,
+          exitPrice,
+          quantity,
+          pnl,
+          pnlPercent: pnl !== null ? (pnl / (entryPrice * quantity)) * 100 : null,
           reason: p.exitReason || 'manual',
-          timestamp: new Date(p.timestamp).toLocaleString('es-ES')
+          timestamp: new Date(p.timestamp).toISOString()
         };
       })
     );
@@ -373,6 +374,8 @@ app.get('/api/stats/overall', async (_req: Request, res: Response) => {
 
 // Número de velas a obtener por timeframe del gráfico
 const CHART_LIMITS: Record<string, number> = {
+  '1m': 180,  // 180 velas de 1m = 3 horas (temporalidad del agente)
+  '5m': 144,  // 144 velas de 5m = 12 horas (temporalidad del agente)
   '1h': 24,   // 24 velas de 1h = 1 día
   '4h': 30,   // 30 velas de 4h = 5 días
   '1d': 30,   // 30 velas de 1 día = 1 mes
@@ -453,6 +456,17 @@ app.get('/api/chart-data', async (req: Request, res: Response) => {
   } catch (error) {
     return sendError(res, 'chart-data', error);
   }
+});
+
+/**
+ * API: Señales recientes del agente (entradas y avisos de venta) con su proyección de velas
+ */
+app.get('/api/signals', (req: Request, res: Response) => {
+  const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : undefined;
+  if (symbol !== undefined && !SYMBOL_PATTERN.test(symbol)) {
+    return res.status(400).json({ error: 'Símbolo inválido' });
+  }
+  return res.json(agentInstance ? agentInstance.getSignals(symbol) : []);
 });
 
 /**

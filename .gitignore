@@ -37,3 +37,6 @@ Thumbs.db
 # Temp
 tmp/
 temp/
+
+# Capturas y artefactos de Playwright
+.playwright-mcp/

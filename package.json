@@ -16,6 +16,7 @@
     "test:indicators": "tsx src/__tests__/indicators.test.ts",
     "test:scorer": "tsx src/__tests__/scorer.test.ts",
     "test:risk": "tsx src/__tests__/risk-manager.test.ts",
+    "test:forecast": "tsx src/__tests__/forecast.test.ts",
     "test:executor": "tsx src/__tests__/executor.test.ts",
     "test:telegram": "tsx src/__tests__/telegram.test.ts"
   },
